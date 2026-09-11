@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+
+  <title>Add Budget Expense</title>
+
+  <style>
+
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 30px 20px;
+      text-align: center;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    #status {
+      margin: 20px 0;
+      color: #666;
+    }
+
+    button {
+      width: 100%;
+      padding: 20px;
+      margin: 10px 0;
+      font-size: 20px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+    }
+
+    #speakButton {
+      background: #222;
+      color: white;
+    }
+
+    #addButton {
+      background: #2e7d32;
+      color: white;
+      display: none;
+    }
+
+    #cancelButton {
+      background: #ddd;
+      display: none;
+    }
+
+    #result {
+      margin-top: 25px;
+      padding: 20px;
+      border-radius: 10px;
+      background: #f5f5f5;
+      line-height: 1.7;
+      display: none;
+    }
+
+  </style>
+
+</head>
+
+
+<body>
+
+  <h1>🎤 Add Budget Expense</h1>
+
+  <div id="status">
+    Tap the button and tell me what you spent.
+  </div>
+
+  <button id="speakButton">
+    🎤 Tap to Speak
+  </button>
+
+  <div id="result"></div>
+
+  <button id="addButton">
+    Add Transaction
+  </button>
+
+  <button id="cancelButton">
+    Cancel
+  </button>
+
+
+<script>
+
+
+// =====================================================
+// CONFIGURATION
+// =====================================================
+
+const APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbyTkgYatcu3l4N4eiuRkKER0r6X7I60KjvV0xLVH88ZG2jeGlaliYP6QQRA1C-XgZAV7g/exec";
+
+const SECRET_TOKEN =
+  "0c5d9877-d417-4412-afd0-a36d1aaab461";
+
+
+// =====================================================
+// BUDGET CATEGORIES
+// =====================================================
+
+const categories = [
+  "Food",
+  "Gifts/Tithe",
+  "Health/medical",
+  "Home",
+  "Car",
+  "Personal",
+  "Pets",
+  "Home Making",
+  "Fun(Travel)",
+  "Debt",
+  "Savings Account",
+  "Gym",
+  "Subscriptions",
+  "Hygiene"
+];
+
+
+// =====================================================
+// STATE
+// =====================================================
+
+let transaction = null;
+
+
+// =====================================================
+// SPEECH RECOGNITION
+// =====================================================
+
+const SpeechRecognition =
+  window.SpeechRecognition ||
+  window.webkitSpeechRecognition;
+
+
+if (!SpeechRecognition) {
+
+  document.getElementById("status").innerText =
+    "Speech recognition is not supported by this browser.";
+
+}
+else {
+
+  const recognition =
+    new SpeechRecognition();
+
+  recognition.lang = "en-US";
+
+  recognition.interimResults = false;
+
+  recognition.continuous = false;
+
+
+  document
+    .getElementById("speakButton")
+    .addEventListener("click", function() {
+
+      document.getElementById("status").innerText =
+        "Listening...";
+
+      recognition.start();
+
+    });
+
+
+  recognition.onresult = function(event) {
+
+    const transcript =
+      event.results[0][0].transcript;
+
+    document.getElementById("status").innerText =
+      "I heard: " + transcript;
+
+    parseTransaction(transcript);
+
+  };
+
+
+  recognition.onerror = function(event) {
+
+    document.getElementById("status").innerText =
+      "Speech error: " + event.error;
+
+  };
+
+}
+
+
+// =====================================================
+// PARSE SPEECH
+// =====================================================
+
+function parseTransaction(text) {
+
+  const originalText = text;
+
+  text = text.toLowerCase();
+
+
+  // Find dollar amount
+
+  const amountMatch =
+    text.match(/\$?\s*(\d+(?:\.\d{1,2})?)/);
+
+
+  if (!amountMatch) {
+
+    showError(
+      "I couldn't find an amount."
+    );
+
+    return;
+
+  }
+
+
+  const amount =
+    parseFloat(amountMatch[1]);
+
+
+  // Find category
+
+  let category = null;
+
+  for (const possibleCategory of categories) {
+
+    if (
+      text.includes(
+        possibleCategory.toLowerCase()
+      )
+    ) {
+
+      category = possibleCategory;
+
+      break;
+
+    }
+
+  }
+
+
+  if (!category) {
+
+    showError(
+      "I couldn't identify the budget category."
+    );
+
+    return;
+
+  }
+
+
+  // Create description
+
+  let description =
+    originalText
+      .replace(amountMatch[0], "")
+      .replace(
+        new RegExp(category, "i"),
+        ""
+      )
+      .trim();
+
+
+  transaction = {
+
+    amount: amount,
+
+    description: description,
+
+    category: category
+
+  };
+
+
+  showTransaction();
+
+}
+
+
+// =====================================================
+// DISPLAY TRANSACTION
+// =====================================================
+
+function showTransaction() {
+
+  const result =
+    document.getElementById("result");
+
+
+  result.innerHTML = `
+
+    <strong>Transaction</strong>
+
+    <br><br>
+
+    Amount:
+    $${transaction.amount.toFixed(2)}
+
+    <br>
+
+    Description:
+    ${transaction.description || "(none)"}
+
+    <br>
+
+    Category:
+    ${transaction.category}
+
+  `;
+
+
+  result.style.display = "block";
+
+
+  document
+    .getElementById("addButton")
+    .style.display = "block";
+
+
+  document
+    .getElementById("cancelButton")
+    .style.display = "block";
+
+}
+
+
+// =====================================================
+// SEND TO GOOGLE SHEETS
+// =====================================================
+
+document
+  .getElementById("addButton")
+  .addEventListener("click", async function() {
+
+    if (!transaction) {
+      return;
+    }
+
+
+    document.getElementById("status").innerText =
+      "Adding transaction...";
+
+
+    const params = new URLSearchParams({
+
+      token: SECRET_TOKEN,
+
+      amount: transaction.amount,
+
+      description: transaction.description,
+
+      category: transaction.category
+
+    });
+
+
+    try {
+
+      const response =
+        await fetch(
+          APPS_SCRIPT_URL +
+          "?" +
+          params.toString()
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (data.success) {
+
+        document.getElementById("status").innerText =
+          "✅ Transaction added!";
+
+
+        reset();
+
+      }
+      else {
+
+        showError(
+          "Could not add transaction: " +
+          data.error
+        );
+
+      }
+
+    }
+
+    catch (error) {
+
+      showError(
+        "Could not connect to your budget."
+      );
+
+      console.error(error);
+
+    }
+
+  });
+
+
+// =====================================================
+// CANCEL
+// =====================================================
+
+document
+  .getElementById("cancelButton")
+  .addEventListener("click", reset);
+
+
+// =====================================================
+// RESET
+// =====================================================
+
+function reset() {
+
+  transaction = null;
+
+  document
+    .getElementById("result")
+    .style.display = "none";
+
+  document
+    .getElementById("addButton")
+    .style.display = "none";
+
+  document
+    .getElementById("cancelButton")
+    .style.display = "none";
+
+}
+
+
+// =====================================================
+// ERROR
+// =====================================================
+
+function showError(message) {
+
+  document.getElementById("status").innerText =
+    "⚠️ " + message;
+
+}
+
+</script>
+
+</body>
+
+</html>
