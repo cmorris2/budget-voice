@@ -28,6 +28,7 @@ try {
   };
   const response = await worker.fetch(request(transaction), env);
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
   assert.deepEqual(await response.json(), { success: true });
   assert.equal(calls, 1);
 
@@ -56,6 +57,17 @@ try {
     assert.equal((await worker.fetch(request(transaction), config)).status, 500);
   }
   assert.equal(calls, 1, "Invalid input and configuration must not reach Apps Script");
+  const preflight = await worker.fetch(new Request("http://localhost/api/transactions", {
+    method: "OPTIONS",
+    headers: { Origin: "https://example.invalid", "Access-Control-Request-Method": "POST" },
+  }));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.equal(preflight.headers.get("Access-Control-Allow-Methods"), "POST, OPTIONS");
+  assert.equal(preflight.headers.get("Access-Control-Allow-Headers"), "Content-Type");
+  assert.equal(calls, 1, "Preflight must not contact Apps Script");
+  const invalid = await worker.fetch(request({}), env);
+  assert.equal(invalid.headers.get("Access-Control-Allow-Origin"), "*");
 
   for (const upstream of [
     () => new Response("private error", { status: 500 }),
@@ -68,6 +80,7 @@ try {
     globalThis.fetch = async () => upstream();
     const failure = await worker.fetch(request(transaction), env);
     assert.equal(failure.status, 502);
+    assert.equal(failure.headers.get("Access-Control-Allow-Origin"), "*");
     assert.deepEqual(await failure.json(), { error: "Could not confirm the transaction with Apps Script." });
   }
   const method = await worker.fetch(new Request("http://localhost/api/transactions"), env);

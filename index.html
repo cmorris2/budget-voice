@@ -102,11 +102,8 @@
 // CONFIGURATION
 // =====================================================
 
-const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxuk35P3kr3WAI3KA4G-hOqlvH5gItskWhrzdwYD7lZwHQ3An7WK2E8XcTDEZksL65qiQ/exec";
-
-const SECRET_TOKEN =
-  "7aa51fbd-b038-4059-b297-bb16aac52782";
+const WORKER_URL = "https://voice-budget-backend.ccolbymorris.workers.dev";
+let isSubmitting = false;
 
 
 // =====================================================
@@ -340,14 +337,14 @@ function showTransaction() {
 
 
 // =====================================================
-// SEND TO GOOGLE SHEETS
+// SEND TO WORKER
 // =====================================================
 
 document
   .getElementById("addButton")
   .addEventListener("click", async function() {
 
-    if (!transaction) {
+    if (!transaction || isSubmitting) {
       return;
     }
 
@@ -356,34 +353,29 @@ document
       "Adding transaction...";
 
 
-    const params = new URLSearchParams({
-
-      token: SECRET_TOKEN,
-
-      amount: transaction.amount,
-
-      description: transaction.description,
-
-      category: transaction.category
-
-    });
-
+    isSubmitting = true;
+    const addButton = document.getElementById("addButton");
+    const cancelButton = document.getElementById("cancelButton");
+    addButton.disabled = true;
+    cancelButton.disabled = true;
 
     try {
-
-      const response =
-        await fetch(
-          APPS_SCRIPT_URL +
-          "?" +
-          params.toString()
-        );
+      const response = await fetch(WORKER_URL + "/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: transaction.amount,
+          description: transaction.description,
+          category: transaction.category
+        })
+      });
 
 
       const data =
         await response.json();
 
 
-      if (data.success) {
+      if (response.ok && data.success === true) {
 
         document.getElementById("status").innerText =
           "✅ Transaction added!";
@@ -395,8 +387,9 @@ document
       else {
 
         showError(
-          "Could not add transaction: " +
-          data.error
+          response.status === 502
+            ? "Could not confirm the transaction. Check your spreadsheet before retrying to avoid duplicates."
+            : (data.error || "The transaction request failed.")
         );
 
       }
@@ -406,11 +399,16 @@ document
     catch (error) {
 
       showError(
-        "Could not connect to your budget."
+        "Could not confirm the transaction. Check your spreadsheet before retrying to avoid duplicates."
       );
 
-      console.error(error);
+      console.error("Transaction request failed.");
 
+    }
+    finally {
+      isSubmitting = false;
+      addButton.disabled = false;
+      cancelButton.disabled = false;
     }
 
   });

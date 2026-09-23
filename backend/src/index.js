@@ -3,14 +3,17 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/transactions") {
+      if (request.method === "OPTIONS") {
+        return withCors(new Response(null, { status: 204 }));
+      }
       if (request.method !== "POST") {
-        return new Response("Method Not Allowed", {
+        return withCors(new Response("Method Not Allowed", {
           status: 405,
           headers: { Allow: "POST" },
-        });
+        }));
       }
 
-      return createTransaction(request, env);
+      return withCors(await createTransaction(request, env));
     }
 
     if (url.pathname !== "/api/hello") {
@@ -27,6 +30,14 @@ export default {
     return Response.json({ message: "Voice Budget backend is working" });
   },
 };
+
+function withCors(response) {
+  // Public endpoint, with no browser cookies or other caller credentials.
+  response.headers.set("Access-Control-Allow-Origin", "*");
+  response.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "Content-Type");
+  return response;
+}
 
 async function createTransaction(request, env) {
   let body;

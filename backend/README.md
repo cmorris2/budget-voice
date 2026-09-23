@@ -135,4 +135,10 @@ See [Cloudflare's secrets documentation](https://developers.cloudflare.com/worke
 
 The endpoint has no caller authentication. The Apps Script token authenticates
 the Worker to Apps Script; it does not restrict who can call the Worker endpoint.
-The existing `index.html` remains unchanged and is not connected to this route.
+The frontend in `index.html` POSTs JSON to the public Worker URL configured in
+`WORKER_URL`. Deploy the Worker changes before using the updated frontend:
+the transaction route answers browser OPTIONS preflight requests and includes
+CORS headers on success and error responses. It allows any origin without
+credentials, matching this public endpoint's current lack of authentication.
+For local frontend testing, temporarily set `WORKER_URL` to
+`http://localhost:8787` while Wrangler is running.
