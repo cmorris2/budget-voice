@@ -49,12 +49,10 @@
     #addButton {
       background: #2e7d32;
       color: white;
-      display: none;
     }
 
     #cancelButton {
       background: #ddd;
-      display: none;
     }
 
     #result {
@@ -63,8 +61,16 @@
       border-radius: 10px;
       background: #f5f5f5;
       line-height: 1.7;
-      display: none;
     }
+
+    label { display: block; text-align: left; margin-top: 12px; }
+    input, select {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 10px;
+      font: inherit;
+    }
+    button:disabled { opacity: 0.6; cursor: wait; }
 
   </style>
 
@@ -75,57 +81,107 @@
 
   <h1>🎤 Add Budget Expense</h1>
 
-  <div id="status">
-    Tap the button and tell me what you spent.
-    Description, cost, category
+  <div id="status" role="status" aria-live="polite">
+    Tap to Speak, then review the details before adding the transaction.
   </div>
 
   <button id="speakButton">
     🎤 Tap to Speak
   </button>
 
-  <div id="result"></div>
+  <form id="transactionForm">
+  <div id="result">
+    <strong>Review or enter transaction details</strong>
+    <label for="amount">Amount</label>
+    <input id="amount" type="number" min="0.01" step="0.01" required>
+    <label for="description">Description</label>
+    <input id="description" type="text" required>
+    <label for="category">Category</label>
+    <select id="category" required>
+      <option value="">Choose a category</option>
+    </select>
+  </div>
 
-  <button id="addButton">
+  <button id="addButton" type="submit">
     Add Transaction
   </button>
 
-  <button id="cancelButton">
+  <button id="cancelButton" type="button">
     Cancel
   </button>
+  </form>
 
 
-<script>
+<script type="module">
+
+import { allowedCategories as categories } from "./shared/categories.mjs";
 
 
 // =====================================================
 // CONFIGURATION
 // =====================================================
 
-const WORKER_URL = "https://voice-budget-backend.ccolbymorris.workers.dev";
+const WORKER_URL = "http://localhost:8787";
 let isSubmitting = false;
+let isParsing = false;
+let isListening = false;
+let formRevision = 0;
+const form = document.getElementById("transactionForm");
+const amountField = document.getElementById("amount");
+const descriptionField = document.getElementById("description");
+const categoryField = document.getElementById("category");
+for (const category of categories) {
+  const option = document.createElement("option");
+  option.value = category;
+  option.textContent = category;
+  categoryField.append(option);
+}
+form.addEventListener("input", () => { formRevision++; });
 
+function updateButtons() {
+  document.getElementById("addButton").disabled = isListening || isParsing || isSubmitting;
+  document.getElementById("cancelButton").disabled = isListening || isSubmitting;
+  document.getElementById("speakButton").disabled = isListening || isParsing || isSubmitting || !SpeechRecognition;
+  for (const field of [amountField, descriptionField, categoryField]) field.disabled = isSubmitting;
+}
 
-// =====================================================
-// BUDGET CATEGORIES
-// =====================================================
-
-const categories = [
-  "Food",
-  "Gifts/Tithe",
-  "Health/medical",
-  "Home",
-  "Car",
-  "Personal",
-  "Pets",
-  "Home Making",
-  "Fun(Travel)",
-  "Debt",
-  "Savings Account",
-  "Gym",
-  "Subscriptions",
-  "Hygiene"
-];
+async function analyzeTransaction(transcript, revision) {
+  if (isParsing || isSubmitting) return;
+  const text = transcript.trim();
+  if (!text || text.length > 2000) {
+    showError("Please speak a transaction of up to 2000 characters, or enter the details manually.");
+    return;
+  }
+  isParsing = true;
+  updateButtons();
+  document.getElementById("status").innerText = "Analyzing transaction...";
+  try {
+    const response = await fetch(WORKER_URL + "/api/parse-transaction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(30000)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error("Parsing failed");
+    if (typeof data?.amount !== "number" || !Number.isFinite(data.amount) || data.amount <= 0 ||
+        typeof data.description !== "string" || !data.description.trim() || !categories.includes(data.category)) {
+      throw new Error("Invalid transaction response");
+    }
+    if (revision !== formRevision) {
+      document.getElementById("status").innerText = "Your manual changes were kept. Tap to Speak again if you want to replace them.";
+      return;
+    }
+    transaction = { amount: data.amount, description: data.description, category: data.category };
+    showTransaction();
+    document.getElementById("status").innerText = "Review and edit the details, then select Add Transaction to save.";
+  } catch {
+    showError("Could not analyze the transaction. Try again or enter the details manually.");
+  } finally {
+    isParsing = false;
+    updateButtons();
+  }
+}
 
 
 // =====================================================
@@ -146,8 +202,9 @@ const SpeechRecognition =
 
 if (!SpeechRecognition) {
 
-  document.getElementById("status").innerText =
-    "Speech recognition is not supported by this browser.";
+  document.getElementById("speakButton").disabled = true;
+  document.getElementById("speakButton").title = "Speech recognition is not supported by this browser.";
+  document.getElementById("status").innerText = "Speech recognition is not supported by this browser. Enter the details manually below.";
 
 }
 else {
@@ -160,131 +217,62 @@ else {
   recognition.interimResults = false;
 
   recognition.continuous = false;
+  let listeningRevision = 0;
+  let receivedResult = false;
+  let speechFailed = false;
 
 
   document
     .getElementById("speakButton")
     .addEventListener("click", function() {
-
+      if (isListening || isParsing || isSubmitting) return;
+      listeningRevision = formRevision;
+      receivedResult = false;
+      speechFailed = false;
+      isListening = true;
+      updateButtons();
       document.getElementById("status").innerText =
         "Listening...";
 
-      recognition.start();
+      try {
+        recognition.start();
+      } catch {
+        isListening = false;
+        speechFailed = true;
+        updateButtons();
+        showError("Could not start speech recognition. Try again or enter the details manually.");
+      }
 
     });
 
 
   recognition.onresult = function(event) {
 
+    if (!isListening || receivedResult || isParsing || isSubmitting) return;
+    receivedResult = true;
+
     const transcript =
       event.results[0][0].transcript;
 
-    document.getElementById("status").innerText =
-      "I heard: " + transcript;
-
-    parseTransaction(transcript);
+    return analyzeTransaction(transcript, listeningRevision);
 
   };
 
 
   recognition.onerror = function(event) {
-
+    speechFailed = true;
     document.getElementById("status").innerText =
       "Speech error: " + event.error;
 
   };
 
-}
-
-
-// =====================================================
-// PARSE SPEECH
-// =====================================================
-
-function parseTransaction(text) {
-
-  const originalText = text;
-
-  text = text.toLowerCase();
-
-
-  // Find dollar amount
-
-  const amountMatch =
-    text.match(/\$?\s*(\d+(?:\.\d{1,2})?)/);
-
-
-  if (!amountMatch) {
-
-    showError(
-      "I couldn't find an amount."
-    );
-
-    return;
-
-  }
-
-
-  const amount =
-    parseFloat(amountMatch[1]);
-
-
-  // Find category
-
-  let category = null;
-
-  for (const possibleCategory of categories) {
-
-    if (
-      text.includes(
-        possibleCategory.toLowerCase()
-      )
-    ) {
-
-      category = possibleCategory;
-
-      break;
-
+  recognition.onend = function() {
+    isListening = false;
+    updateButtons();
+    if (!receivedResult && !speechFailed) {
+      showError("No speech was heard. Try again or enter the details manually.");
     }
-
-  }
-
-
-  if (!category) {
-
-    showError(
-      "I couldn't identify the budget category."
-    );
-
-    return;
-
-  }
-
-
-  // Create description
-
-  let description =
-    originalText
-      .replace(amountMatch[0], "")
-      .replace(
-        new RegExp(category, "i"),
-        ""
-      )
-      .trim();
-
-
-  transaction = {
-
-    amount: amount,
-
-    description: description,
-
-    category: category
-
   };
-
-
-  showTransaction();
 
 }
 
@@ -294,45 +282,10 @@ function parseTransaction(text) {
 // =====================================================
 
 function showTransaction() {
-
-  const result =
-    document.getElementById("result");
-
-
-  result.innerHTML = `
-
-    <strong>Transaction</strong>
-
-    <br><br>
-
-    Amount:
-    $${transaction.amount.toFixed(2)}
-
-    <br>
-
-    Description:
-    ${transaction.description || "(none)"}
-
-    <br>
-
-    Category:
-    ${transaction.category}
-
-  `;
-
-
-  result.style.display = "block";
-
-
-  document
-    .getElementById("addButton")
-    .style.display = "block";
-
-
-  document
-    .getElementById("cancelButton")
-    .style.display = "block";
-
+  amountField.value = String(transaction.amount);
+  descriptionField.value = transaction.description;
+  categoryField.value = transaction.category;
+  formRevision++;
 }
 
 
@@ -341,10 +294,24 @@ function showTransaction() {
 // =====================================================
 
 document
-  .getElementById("addButton")
-  .addEventListener("click", async function() {
+  .getElementById("transactionForm")
+  .addEventListener("submit", async function(event) {
+    event.preventDefault();
 
-    if (!transaction || isSubmitting) {
+    if (isListening || isParsing || isSubmitting) {
+      return;
+    }
+
+    if (!form.reportValidity()) return;
+    // Read the current fields, including edits made after AI parsing.
+    const confirmedTransaction = {
+      amount: Number(amountField.value),
+      description: descriptionField.value.trim(),
+      category: categoryField.value
+    };
+    if (!Number.isFinite(confirmedTransaction.amount) || confirmedTransaction.amount <= 0 ||
+        !confirmedTransaction.description || !categories.includes(confirmedTransaction.category)) {
+      showError("Enter a positive amount, description, and category.");
       return;
     }
 
@@ -354,19 +321,17 @@ document
 
 
     isSubmitting = true;
-    const addButton = document.getElementById("addButton");
-    const cancelButton = document.getElementById("cancelButton");
-    addButton.disabled = true;
-    cancelButton.disabled = true;
+    updateButtons();
 
     try {
       const response = await fetch(WORKER_URL + "/api/transactions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // Explicit save fields: parsed dates are not persisted yet.
         body: JSON.stringify({
-          amount: transaction.amount,
-          description: transaction.description,
-          category: transaction.category
+          amount: confirmedTransaction.amount,
+          description: confirmedTransaction.description,
+          category: confirmedTransaction.category
         })
       });
 
@@ -407,8 +372,7 @@ document
     }
     finally {
       isSubmitting = false;
-      addButton.disabled = false;
-      cancelButton.disabled = false;
+      updateButtons();
     }
 
   });
@@ -431,17 +395,8 @@ function reset() {
 
   transaction = null;
 
-  document
-    .getElementById("result")
-    .style.display = "none";
-
-  document
-    .getElementById("addButton")
-    .style.display = "none";
-
-  document
-    .getElementById("cancelButton")
-    .style.display = "none";
+  form.reset();
+  formRevision++;
 
 }
 
