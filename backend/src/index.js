@@ -2,6 +2,20 @@ export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/api/parse-transaction") {
+      if (request.method === "OPTIONS") {
+        return withCors(new Response(null, { status: 204 }));
+      }
+      if (request.method !== "POST") {
+        return withCors(new Response("Method Not Allowed", {
+          status: 405,
+          headers: { Allow: "POST" },
+        }));
+      }
+
+      return withCors(await parseTransaction(request));
+    }
+
     if (url.pathname === "/api/transactions") {
       if (request.method === "OPTIONS") {
         return withCors(new Response(null, { status: 204 }));
@@ -37,6 +51,31 @@ function withCors(response) {
   response.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   response.headers.set("Access-Control-Allow-Headers", "Content-Type");
   return response;
+}
+
+async function parseTransaction(request) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return Response.json({ error: "Request body must be a JSON object." }, { status: 400 });
+  }
+
+  if (typeof body.text !== "string" || !body.text.trim()) {
+    return Response.json({ error: "text must be a non-empty string." }, { status: 400 });
+  }
+
+  // Placeholder only: no AI parsing or transaction persistence yet.
+  return Response.json({
+    amount: 42.17,
+    description: "Walmart",
+    category: "Groceries",
+    date: "2026-09-22",
+  });
 }
 
 async function createTransaction(request, env) {

@@ -24,7 +24,7 @@ Expected response (HTTP 200, JSON):
 {"message":"Voice Budget backend is working"}
 ```
 
-Other paths return HTTP 404. Other methods at `/api/hello` return HTTP 405
+Unknown paths return HTTP 404. Other methods at `/api/hello` return HTTP 405
 with `Allow: GET`. Stop the local server with Ctrl+C.
 
 On macOS or Linux, use `npm` and `curl` instead of `npm.cmd` and `curl.exe`.
@@ -32,6 +32,30 @@ On macOS or Linux, use `npm` and `curl` instead of `npm.cmd` and `curl.exe`.
 This backend runs separately from the existing frontend. No Cloudflare account
 is needed for local testing, and running the development server does not deploy
 the Worker.
+
+## POST /api/parse-transaction
+
+Accepts a JSON object containing `text`, which must be a non-empty string.
+Missing, non-string, or whitespace-only text, malformed JSON, and non-object
+bodies return HTTP 400 with a JSON `error` message.
+
+With the local server running, test from PowerShell:
+
+```powershell
+'{"text":"Spent $42.17 at Walmart on groceries yesterday"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+```
+
+Every valid request returns HTTP 200 with this fixed placeholder:
+
+```json
+{"amount":42.17,"description":"Walmart","category":"Groceries","date":"2026-09-22"}
+```
+
+This endpoint does not call OpenAI or Apps Script, save a transaction, or require
+secrets. The date is fixed, not calculated from the input. OPTIONS returns HTTP
+204; other methods return HTTP 405 with `Allow: POST`. The existing CORS helper
+adds headers to successful responses, validation errors, method errors, and
+preflight responses, allowing any origin, POST/OPTIONS, and Content-Type.
 
 ## POST /api/transactions
 
