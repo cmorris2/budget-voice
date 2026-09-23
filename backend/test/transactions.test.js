@@ -83,6 +83,27 @@ try {
     assert.equal(failure.headers.get("Access-Control-Allow-Origin"), "*");
     assert.deepEqual(await failure.json(), { error: "Could not confirm the transaction with Apps Script." });
   }
+  const originalWarn = console.warn;
+  try {
+    for (const [error, reason] of [
+      ["Unauthorized", "unauthorized"],
+      ["Invalid amount", "invalid_amount"],
+      ["Invalid category", "invalid_category"],
+      ["Transactions sheet not found", "transactions_sheet_not_found"],
+      [env.APPS_SCRIPT_TOKEN, "unrecognized_response_or_script_error"],
+    ]) {
+      const logs = [];
+      console.warn = (...args) => logs.push(args);
+      globalThis.fetch = async () => Response.json({ success: false, error });
+      const response = await worker.fetch(request(transaction), env);
+      assert.equal(response.status, 502);
+      assert.deepEqual(logs[0], ["Apps Script rejected transaction", { reason }]);
+      assert.ok(!JSON.stringify(logs).includes(env.APPS_SCRIPT_TOKEN));
+      assert.deepEqual(await response.json(), { error: "Could not confirm the transaction with Apps Script." });
+    }
+  } finally {
+    console.warn = originalWarn;
+  }
   const method = await worker.fetch(new Request("http://localhost/api/transactions"), env);
   assert.equal(method.status, 405);
   assert.equal(method.headers.get("Allow"), "POST");

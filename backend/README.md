@@ -24,7 +24,7 @@ Expected response (HTTP 200, JSON):
 {"message":"Voice Budget backend is working"}
 ```
 
-Other paths return HTTP 404. Other methods at `/api/hello` return HTTP 405
+Unknown paths return HTTP 404. Other methods at `/api/hello` return HTTP 405
 with `Allow: GET`. Stop the local server with Ctrl+C.
 
 On macOS or Linux, use `npm` and `curl` instead of `npm.cmd` and `curl.exe`.
@@ -32,6 +32,125 @@ On macOS or Linux, use `npm` and `curl` instead of `npm.cmd` and `curl.exe`.
 This backend runs separately from the existing frontend. No Cloudflare account
 is needed for local testing, and running the development server does not deploy
 the Worker.
+
+## POST /api/parse-transaction
+
+Accepts a JSON object containing `text`, which must be a non-empty string.
+Missing, non-string, or whitespace-only text, malformed JSON, and non-object
+bodies return HTTP 400 with a JSON `error` message.
+
+With the local server running, test from PowerShell:
+
+```powershell
+'{"text":"Spent $42.17 at Walmart on groceries yesterday"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+```
+
+Successful parsing returns HTTP 200 with exactly these fields (example):
+
+```json
+{"amount":42.17,"description":"Walmart","category":"Food","date":"2026-09-22"}
+```
+
+The Worker calls the OpenAI Responses API using `gpt-5.4-nano`, with strict
+JSON Schema output and `store: false`. It reads only the server-side
+`env.OPENAI_API_KEY` binding for authentication. No SDK or new dependencies
+are needed. Input is limited to 2000 characters.
+
+The model receives today's date in `America/Chicago` on every request, resolves
+relative dates, and defaults to today when no date is supplied. "Last Friday"
+means the most recent Friday strictly before today. `allowedCategories` in
+`../shared/categories.mjs` is shared by the frontend and parser, used in the strict
+schema's string enum, the model instructions, and response validation.
+The model chooses the closest category based on purchase purpose, using `Other`
+when no category reasonably fits or context is insufficient. Categories cannot
+be null or invented. Both use `Health/Medical` and include `Other`.
+Groceries and dining map to `Food`.
+The Worker validates the output again, including positive numeric amounts and
+real calendar dates, before returning a proposed transaction. Unknown amount,
+description, or date may be null internally, but incomplete proposals are
+rejected with HTTP 422.
+
+Parsing never calls Apps Script or writes a spreadsheet. The existing
+`/api/transactions` route is unchanged and still accepts only amount,
+description, and category; it does not yet accept the proposed date.
+
+HTTP errors: 400 for invalid input, 422 for unclear/unsupported transactions or
+model refusal, 500 for a missing key, 502 for upstream or output failures, 503
+for upstream rate/quota limits, and 504 for the 20-second timeout. Responses
+contain generic messages, never upstream error details or secrets. No automatic
+retries are made. OPTIONS returns HTTP
+204; other methods return HTTP 405 with `Allow: POST`. The existing CORS helper
+adds headers to successful responses, validation errors, method errors, and
+preflight responses, allowing any origin, POST/OPTIONS, and Content-Type.
+
+Additional PowerShell examples:
+
+```powershell
+'{"text":"Paid $38.50 at Shell for gas today"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+'{"text":"Spent $24 at a pizza restaurant last Friday"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+'{"text":"Paid $15.99 for Netflix on 2026-09-01"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+'{"text":"Bought coffee"}' | curl.exe -i http://localhost:8787/api/parse-transaction -H "Content-Type: application/json" --data-binary '@-'
+```
+
+The last example should return 422 because no amount was supplied.
+These calls use your OpenAI API quota but do not save transactions.
+See [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses),
+[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
+and [GPT-5.4 nano](https://developers.openai.com/api/docs/models/gpt-5.4-nano).
+
+## OpenAI secret setup
+
+No additional `wrangler.jsonc` secret declaration is required.
+The existing `fetch(request, env = {})` handler receives Worker secrets
+through `env`. Do not put the key in Wrangler `vars`, source code, `index.html`,
+frontend JavaScript, logs, responses, or Git.
+
+For local development, privately add this entry to the existing
+`backend/.dev.vars`, replacing the placeholder with your key and preserving
+the Apps Script entries:
+
+```dotenv
+OPENAI_API_KEY="REPLACE_WITH_YOUR_KEY_PRIVATELY"
+```
+
+There is no local `wrangler secret put` step: Wrangler loads `.dev.vars` when
+you run `npm.cmd run dev` from `backend/`. Restart the dev server after editing.
+The backend `.gitignore` already excludes `.dev.vars*` and `.env*`; never
+force-add these files. Local values are not uploaded to Cloudflare.
+
+For the currently configured deployed Worker (`voice-budget-backend`), run
+from `backend/`:
+
+```powershell
+npx.cmd wrangler secret put OPENAI_API_KEY
+```
+
+Enter the key only at Wrangler's interactive prompt, not as a command argument.
+This updates the remote secret and deploys a new Worker version immediately.
+
+No named staging or production environments are configured currently. If you
+later configure an `env.staging` Worker, set its separate secret with:
+
+```powershell
+npx.cmd wrangler secret put OPENAI_API_KEY --env staging
+```
+
+Use `--env production` only if you later define `env.production`; the current
+deployment uses the command without `--env`. Secrets must be set separately
+for each environment. For local staging, `.dev.vars.staging` is loaded by
+`npx.cmd wrangler dev --env staging`; that file replaces `.dev.vars`, so include
+all secrets needed by that environment.
+
+The fetch handler passes `env` to the parsing handler, which accesses:
+
+```js
+const apiKey = env.OPENAI_API_KEY;
+```
+
+The key is used only in the server-side Authorization header sent to OpenAI.
+Never return or log the key or the entire `env`.
+
+Reference: [Cloudflare Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/).
 
 ## POST /api/transactions
 

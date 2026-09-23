@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/transactions.test.js",
+    "test": "node test/transactions.test.js && node test/parse-transaction.test.js && node test/frontend.test.js",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
