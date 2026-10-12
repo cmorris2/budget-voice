@@ -2,5 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "voice-budget-backend",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-15"
+  "compatibility_date": "2026-09-15",
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "persist": true
+    }
+  }
 }
