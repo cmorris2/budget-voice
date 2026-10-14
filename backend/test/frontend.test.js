@@ -5,7 +5,7 @@ import { allowedCategories } from "../../shared/categories.mjs";
 
 const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 const source = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]
-  .replace(/import .*?from .*?;/, "");
+  .replace(/import .*?from .*?;/g, "");
 const elements = new Map();
 for (const [, id] of html.matchAll(/id="([^"]+)"/g)) {
   elements.set(id, { value: "", disabled: false, listeners: {}, options: [],
@@ -20,16 +20,32 @@ const requests = [];
 let respond;
 let recognition;
 let starts = 0;
+let authListener;
+const oauthCalls = [];
+const auth = {
+  signInWithOAuth: async options => { oauthCalls.push(options); return { error: null }; },
+  signOut: async () => ({ error: null }),
+  onAuthStateChange(listener) { authListener = listener; },
+  getSession: async () => ({ data: { session: null }, error: null })
+};
 class SpeechRecognition {
   constructor() { recognition = this; }
   start() { starts++; }
 }
 vm.runInNewContext(source, {
-  categories: allowedCategories,
+  categories: allowedCategories, createClient: () => ({ auth }),
   document: { getElementById: el, createElement: () => ({}) },
-  window: { SpeechRecognition }, console, AbortSignal,
+  window: { SpeechRecognition, location: { origin: "https://example.com", pathname: "/" } }, console, AbortSignal,
   fetch: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return respond(); }
 });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(el("authStatus").textContent, "Not signed in.");
+await el("signInButton").listeners.click();
+assert.equal(oauthCalls[0].provider, "google");
+assert.equal(oauthCalls[0].options.redirectTo, "https://example.com/");
+authListener("SIGNED_IN", { user: { email: "person@example.com", id: "user-123" } });
+assert.match(el("authStatus").textContent, /person@example\.com.*user-123/);
+assert.equal(el("signOutButton").hidden, false);
 const parse = (text = "Spent $42.17 at Walmart") => {
   el("speakButton").listeners.click();
   const pending = recognition.onresult({ results: [[{ transcript: text }]] });
