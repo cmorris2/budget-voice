@@ -1,1 +1,2 @@
-.wrangler/cache/wrangler-account.json
+# Local Wrangler caches, generated bundles, logs, and development state.
+.wrangler/
