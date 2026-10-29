@@ -73,6 +73,9 @@ try {
       { date: "2026-02-30" }, { date: "yesterday" }, { extra: true }].map(change =>
       [() => Response.json(envelope({ ...transaction, ...change })), 502]),
   ];
+  const diagnosticLogs = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => diagnosticLogs.push(args);
   for (const [upstream, status] of cases) {
     globalThis.fetch = async target => {
       assert.equal(target, "https://api.openai.com/v1/responses", "Parsing must never call Apps Script");
@@ -83,6 +86,12 @@ try {
     assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
     assert.ok(!(await response.text()).includes(env.OPENAI_API_KEY));
   }
+  console.warn = originalWarn;
+  assert.ok(diagnosticLogs.some(([message, details]) =>
+    message === "Transaction parsing OpenAI HTTP failure" && details.status === 401));
+  assert.ok(diagnosticLogs.some(([message, details]) =>
+    message === "Transaction parsing failed" && details.reason === "invalid_json"));
+  assert.ok(!JSON.stringify(diagnosticLogs).includes(env.OPENAI_API_KEY));
   console.log("Passed: structured parsing, validation, CORS, refusals, safe upstream errors, and no spreadsheet writes.");
 } finally {
   globalThis.fetch = originalFetch;

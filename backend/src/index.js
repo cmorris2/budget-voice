@@ -67,6 +67,30 @@ const transactionSchema = {
   additionalProperties: false,
 };
 
+function safeDiagnosticValue(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(value)
+    ? value
+    : null;
+}
+
+async function logOpenAIHttpFailure(response) {
+  let errorType = null;
+  let errorCode = null;
+  try {
+    const body = await response.json();
+    errorType = safeDiagnosticValue(body?.error?.type);
+    errorCode = safeDiagnosticValue(body?.error?.code);
+  } catch {
+    // The status and request ID still identify the failure without logging the body.
+  }
+  console.warn("Transaction parsing OpenAI HTTP failure", {
+    status: response.status,
+    requestId: safeDiagnosticValue(response.headers.get("x-request-id")),
+    errorType,
+    errorCode,
+  });
+}
+
 async function parseTransaction(request, env) {
   let body;
   try {
@@ -94,7 +118,8 @@ async function parseTransaction(request, env) {
     timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date());
 
-  let stage = "request";
+  let stage = "openai_request";
+  let reason = "transport_error";
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -125,36 +150,44 @@ Only propose the transaction; do not claim to save it.`,
       }),
     });
     if (!response.ok) {
-      console.warn("Transaction parsing upstream failure", { status: response.status });
+      await logOpenAIHttpFailure(response);
       if (response.status === 429) {
         return Response.json({ error: "Transaction parsing is temporarily unavailable. Please try again later." }, { status: 503 });
       }
-      throw new Error("OpenAI request failed");
+      return Response.json({ error: "Could not parse the transaction. Please try again." }, { status: 502 });
     }
     stage = "response_json";
+    reason = "invalid_json";
     const result = await response.json();
+    reason = "response_not_completed";
     if (result.status !== "completed" || !Array.isArray(result.output)) {
       throw new Error("Incomplete response");
     }
     const content = result.output.filter(item => item.type === "message").flatMap(item => item.content ?? []);
     if (content.some(item => item.type === "refusal")) {
+      console.warn("Transaction parsing rejected", { stage: "response_content", reason: "model_refusal" });
       return Response.json({ error: "Could not parse this text as a transaction." }, { status: 422 });
     }
     const output = content.filter(item => item.type === "output_text");
+    reason = "missing_structured_output";
     if (output.length !== 1) throw new Error("Missing structured output");
     stage = "transaction_validation";
+    reason = "invalid_structured_json";
     const transaction = JSON.parse(output[0].text);
     const fields = transactionSchema.required;
+    reason = "invalid_structured_shape";
     if (!transaction || typeof transaction !== "object" || Array.isArray(transaction) ||
         Object.keys(transaction).length !== fields.length || !fields.every(field => Object.hasOwn(transaction, field))) {
       throw new Error("Invalid structured output");
     }
     if (fields.some(field => transaction[field] === null)) {
+      console.warn("Transaction parsing rejected", { stage, reason: "missing_required_value" });
       return Response.json({ error: "Please describe one expense with an amount, merchant or description, and a clear date." }, { status: 422 });
     }
     const { amount, description, category, date } = transaction;
     const parsedDate = typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
       ? new Date(`${date}T00:00:00Z`) : null;
+    reason = "invalid_transaction_values";
     if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0 ||
         typeof description !== "string" || !description.trim() || !allowedCategories.includes(category) ||
         !parsedDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
@@ -165,7 +198,7 @@ Only propose the transaction; do not claim to save it.`,
     // Never expose or log credentials, prompts, upstream bodies, or exception details.
     const timeout = error?.name === "TimeoutError" || error?.name === "AbortError";
     console.warn("Transaction parsing failed", {
-      stage, timeout,
+      stage, reason, timeout,
     });
     return Response.json({ error: timeout ? "Transaction parsing timed out. Please try again." : "Could not parse the transaction. Please try again." }, { status: timeout ? 504 : 502 });
   }
